@@ -3,17 +3,39 @@ hybrid.py  (Person 4)
 Combines Person 2's content-based scores and Person 3's collaborative scores.
 
 Depends on:
-    content_based.get_similar_movies(title, n)  -> [(title, score), ...]
-    collaborative.get_user_recs(user_id, n)     -> [(title, score), ...]
-    preprocess.load_data()                      -> movies, ratings DataFrames
+    content_based.get_similar_movies(title, n)   -> [(title, score), ...]
+    collaborative.CollaborativeRecommender       (Person 3's class)
+    preprocess.load_data()                       -> movies, ratings DataFrames
+
+Run from the project root so data/ratings.csv is found.
 """
 from functools import lru_cache
 
+from collaborative import CollaborativeRecommender
 from content_based import get_similar_movies
-from collaborative import get_user_recs
 from preprocess import load_data
 
 POOL = 50  # candidates requested from each model before blending
+
+_cf_model = None
+
+
+def _get_cf_model():
+    """Build Person 3's model once and reuse it."""
+    global _cf_model
+    if _cf_model is None:
+        _cf_model = CollaborativeRecommender()
+        _cf_model.fit()
+    return _cf_model
+
+
+def get_user_recs(user_id, n=10):
+    """Wrapper with the agreed interface: [(title, score), ...]. Unknown user -> []."""
+    model = _get_cf_model()
+    if user_id not in model.user_item_matrix.index:
+        return []
+    df = model.recommend_for_user(user_id, top_n=n).dropna(subset=["title"])
+    return list(zip(df["title"], df["predicted_score"]))
 
 
 def _normalize(pairs):
@@ -37,18 +59,20 @@ def _popular_movies():
     return [(row.title, row.mean / 5.0) for row in merged.head(100).itertuples()]
 
 
-def get_hybrid_recs(user_id=None, title=None, n=10, alpha=0.5):
+def get_hybrid_recs(user_id=None, title=None, n=10, alpha=0.5, cf_recs=None):
     """
     Weighted hybrid recommendations.
 
     score = alpha * CF_score + (1 - alpha) * CB_score   (both min-max normalised)
 
     alpha = 1 -> pure collaborative, alpha = 0 -> pure content-based.
-    Cold-start handling:
+    cf_recs: optional [(title, score)] list. evaluate.py passes recommendations
+             from a model trained on the train split only, to avoid test leakage.
+    Cold start:
       * unknown user / no user_id -> content-based only
       * no title / unknown title  -> collaborative only
       * neither works             -> popular movies
-    Returns a list of (title, score), best first.
+    Returns [(title, score), ...], best first.
     """
     cb, cf = {}, {}
 
@@ -58,7 +82,9 @@ def get_hybrid_recs(user_id=None, title=None, n=10, alpha=0.5):
         except Exception:
             cb = {}
 
-    if user_id is not None:
+    if cf_recs is not None:
+        cf = _normalize(cf_recs)
+    elif user_id is not None:
         try:
             cf = _normalize(get_user_recs(user_id, n=POOL))
         except Exception:
@@ -67,7 +93,6 @@ def get_hybrid_recs(user_id=None, title=None, n=10, alpha=0.5):
     if not cb and not cf:
         return [(t, round(s, 4)) for t, s in _popular_movies()[:n]]
 
-    # If one source is missing, use the other at full weight.
     a = 1.0 if not cb else 0.0 if not cf else alpha
 
     combined = {}

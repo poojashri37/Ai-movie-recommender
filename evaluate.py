@@ -1,19 +1,12 @@
 """
-evaluate.py  (Person 4)
-evaluate_all() -> DataFrame comparing Content-Based, Collaborative and Hybrid
-on RMSE, MAE, Precision@K and Recall@K.
-
-Requirements from teammates (agree on these on day one):
-  P3 (collaborative.py):
-      fit(train_ratings_df)          - rebuild the model on the training split ONLY
-                                       (otherwise test ratings leak into the model)
-      predict_rating(user_id, title) - predicted rating (needed for RMSE/MAE)
-  P2 (content_based.py): get_similar_movies(title, n) as agreed.
+evaluate.py  (Person 4 - aligned with Person 3's CollaborativeRecommender)
+Evaluates Content-Based, Collaborative and Hybrid recommenders on
+RMSE, MAE, Precision@K and Recall@K.
 """
 import numpy as np
 import pandas as pd
 
-import collaborative
+from collaborative import CollaborativeRecommender
 from content_based import get_similar_movies
 from hybrid import get_hybrid_recs
 from preprocess import load_data
@@ -24,6 +17,8 @@ ALPHA = 0.5
 SEED = 42
 MAX_USERS = 200              # users sampled for ranking metrics
 MAX_TEST_ROWS = 500          # rows sampled for RMSE / MAE
+
+CF_FAILURES = 0              # counts silent fallbacks in CF rating prediction
 
 
 # ---------------------------------------------------------------- split
@@ -67,13 +62,17 @@ def _cb_predict(user_hist, target_title, user_mean):
     return num / den if den > 0 else user_mean
 
 
-def _cf_predict(user_id, title, user_mean):
-    fn = getattr(collaborative, "predict_rating", None)
-    if fn is None:
-        return np.nan
+def _cf_predict(cf_model, user_id, title, title_to_id, user_mean):
+    """CF rating via CollaborativeRecommender.predict_rating (needs movieId)."""
+    global CF_FAILURES
+    movie_id = title_to_id.get(title)
+    if movie_id is None:
+        CF_FAILURES += 1
+        return user_mean
     try:
-        return float(fn(user_id, title))
+        return float(cf_model.predict_rating(user_id, movie_id))
     except Exception:
+        CF_FAILURES += 1
         return user_mean
 
 
@@ -93,31 +92,44 @@ def _rec_content(user_id, user_hist):
     return [t for t, _ in sorted(scores.items(), key=lambda x: -x[1])]
 
 
-def _rec_cf(user_id, user_hist):
+def _cf_pairs(cf_model, user_id):
+    """[(title, predicted_score), ...] from the train-only CF model."""
     try:
-        return [t for t, _ in collaborative.get_user_recs(user_id, n=50)]
+        df = cf_model.recommend_for_user(user_id, top_n=50).dropna(subset=["title"])
+        return list(zip(df["title"], df["predicted_score"]))
     except Exception:
         return []
 
 
-def _rec_hybrid(user_id, user_hist):
+def _rec_cf(cf_model, user_id):
+    return [t for t, _ in _cf_pairs(cf_model, user_id)]
+
+
+def _rec_hybrid(cf_model, user_id, user_hist):
     seeds = _seed_titles(user_hist, 1)
     seed = seeds[0] if seeds else None
-    return [t for t, _ in get_hybrid_recs(user_id, seed, n=50, alpha=ALPHA)]
+    # Pass the train-only CF results in, so the hybrid never sees test ratings.
+    return [t for t, _ in get_hybrid_recs(user_id, seed, n=50, alpha=ALPHA,
+                                          cf_recs=_cf_pairs(cf_model, user_id))]
 
 
 # ---------------------------------------------------------------- main entry point
 def evaluate_all(k=K):
     """Run every model on the same split and return a results DataFrame."""
+    global CF_FAILURES
+    CF_FAILURES = 0
+
     movies, ratings = load_data()
     ratings = ratings.merge(movies[["movieId", "title"]], on="movieId")
     train, test = train_test_split_ratings(ratings)
 
-    # Rebuild collaborative model on train only (see module docstring).
-    if hasattr(collaborative, "fit"):
-        collaborative.fit(train[["userId", "movieId", "rating"]])
-    else:
-        print("WARNING: collaborative.fit() not found - CF results may be leaked/inflated.")
+    title_to_id = dict(zip(movies["title"], movies["movieId"]))
+
+    # Fit Person 3's model on the training split only
+    cf_model = CollaborativeRecommender()
+    cf_model.ratings = train[["userId", "movieId", "rating"]]
+    cf_model.movies = movies
+    cf_model.fit()
 
     hist = {u: dict(zip(g["title"], g["rating"])) for u, g in train.groupby("userId")}
     means = train.groupby("userId")["rating"].mean().to_dict()
@@ -130,9 +142,12 @@ def evaluate_all(k=K):
         uh = hist.get(row.userId, {})
         um = means.get(row.userId, global_mean)
         cb = _cb_predict(uh, row.title, um)
-        cf = _cf_predict(row.userId, row.title, um)
-        hy = ALPHA * cf + (1 - ALPHA) * cb if not np.isnan(cf) else np.nan
+        cf = _cf_predict(cf_model, row.userId, row.title, title_to_id, um)
+        hy = ALPHA * cf + (1 - ALPHA) * cb
         y.append(row.rating); p_cb.append(cb); p_cf.append(cf); p_hy.append(hy)
+
+    print(f"CF prediction fallbacks: {CF_FAILURES} of {len(sample)} "
+          f"(should be close to 0)")
 
     def _err(pred):
         pred = np.array(pred, dtype=float)
@@ -150,9 +165,9 @@ def evaluate_all(k=K):
     users = list(rng.choice(users, min(MAX_USERS, len(users)), replace=False))
 
     models = {
-        "Content-Based": (_rec_content, _err(p_cb)),
-        "Collaborative": (_rec_cf, _err(p_cf)),
-        "Hybrid":        (_rec_hybrid, _err(p_hy)),
+        "Content-Based": (lambda u, h: _rec_content(u, h), _err(p_cb)),
+        "Collaborative": (lambda u, h: _rec_cf(cf_model, u), _err(p_cf)),
+        "Hybrid":        (lambda u, h: _rec_hybrid(cf_model, u, h), _err(p_hy)),
     }
 
     rows = []
