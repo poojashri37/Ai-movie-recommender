@@ -51,17 +51,21 @@ class CollaborativeRecommender:
             columns=self.user_item_matrix.columns
         )
 
-        # 2. Matrix Factorization (SVD) for predicting missing ratings
-        n_comp = min(self.n_components, self.user_item_matrix.shape[1] - 1)
+       # 2. Matrix Factorization (SVD) for predicting missing ratings (mean-centered)
+        raw_matrix = self.ratings.pivot_table(index="userId", columns="movieId", values="rating")
+        user_means = raw_matrix.mean(axis=1)
+        centered_matrix = raw_matrix.sub(user_means, axis=0).fillna(0)
+
+        n_comp = min(self.n_components, centered_matrix.shape[1] - 1)
         svd = TruncatedSVD(n_components=n_comp, random_state=42)
-        user_factors = svd.fit_transform(self.user_item_matrix)
+        user_factors = svd.fit_transform(centered_matrix)
         item_factors = svd.components_
 
-        predicted_matrix = np.dot(user_factors, item_factors)
+        predicted_matrix = np.dot(user_factors, item_factors) + user_means.values.reshape(-1, 1)
         self.predicted_ratings_df = pd.DataFrame(
             predicted_matrix,
-            index=self.user_item_matrix.index,
-            columns=self.user_item_matrix.columns
+            index=centered_matrix.index,
+            columns=centered_matrix.columns
         )
 
     def predict_rating(self, user_id, movie_id):
