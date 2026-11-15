@@ -13,7 +13,7 @@ from preprocess import load_data
 
 K = 10
 RELEVANT_THRESHOLD = 4.0     # rating >= 4 counts as "liked"
-ALPHA = 0.5
+ALPHA = 0.8
 SEED = 42
 MAX_USERS = 200              # users sampled for ranking metrics
 MAX_TEST_ROWS = 500          # rows sampled for RMSE / MAE

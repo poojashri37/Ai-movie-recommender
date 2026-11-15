@@ -83,7 +83,7 @@ def _popular_movies():
     return [(row.title, row.mean / 5.0) for row in merged.head(100).itertuples()]
 
 
-def get_hybrid_recs(user_id=None, title=None, n=10, alpha=0.5, cf_recs=None):
+def get_hybrid_recs(user_id=None, title=None, n=10, alpha=0.8, cf_recs=None):
     """
     Weighted hybrid recommendations.
 
