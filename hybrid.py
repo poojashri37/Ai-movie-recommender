@@ -11,6 +11,10 @@ Run from the project root so data/ratings.csv is found.
 """
 from functools import lru_cache
 
+import numpy as np
+import pandas as pd
+from sklearn.decomposition import TruncatedSVD
+
 from collaborative import CollaborativeRecommender
 from content_based import get_similar_movies
 from preprocess import load_data
@@ -29,13 +33,33 @@ def _get_cf_model():
     return _cf_model
 
 
+def cf_rank_recs(model, user_id, n=10):
+    """
+    Top-n unseen movies for a user, ranked with a zero-filled SVD.
+    (A mean-centered SVD is better for predicting ratings but worse for top-N
+    ranking, so ranking uses its own matrix, built once from the fitted model.)
+    Returns [(title, score), ...]; unknown user -> [].
+    """
+    rank_df = getattr(model, "_rank_df", None)
+    if rank_df is None:
+        M = model.user_item_matrix
+        k = min(20, M.shape[1] - 1)
+        svd = TruncatedSVD(n_components=k, random_state=42)
+        U = svd.fit_transform(M)
+        rank_df = pd.DataFrame(np.dot(U, svd.components_), index=M.index, columns=M.columns)
+        model._rank_df = rank_df
+    if user_id not in rank_df.index:
+        return []
+    row = model.user_item_matrix.loc[user_id]
+    seen = row[row > 0].index
+    top = rank_df.loc[user_id].drop(index=seen).sort_values(ascending=False).head(n)
+    titles = model.movies.set_index("movieId")["title"]
+    return [(titles[m], float(s)) for m, s in top.items() if m in titles.index]
+
+
 def get_user_recs(user_id, n=10):
     """Wrapper with the agreed interface: [(title, score), ...]. Unknown user -> []."""
-    model = _get_cf_model()
-    if user_id not in model.user_item_matrix.index:
-        return []
-    df = model.recommend_for_user(user_id, top_n=n).dropna(subset=["title"])
-    return list(zip(df["title"], df["predicted_score"]))
+    return cf_rank_recs(_get_cf_model(), user_id, n)
 
 
 def _normalize(pairs):

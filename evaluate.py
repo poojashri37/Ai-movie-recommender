@@ -8,7 +8,7 @@ import pandas as pd
 
 from collaborative import CollaborativeRecommender
 from content_based import get_similar_movies
-from hybrid import get_hybrid_recs
+from hybrid import cf_rank_recs, get_hybrid_recs
 from preprocess import load_data
 
 K = 10
@@ -93,10 +93,9 @@ def _rec_content(user_id, user_hist):
 
 
 def _cf_pairs(cf_model, user_id):
-    """[(title, predicted_score), ...] from the train-only CF model."""
+    """[(title, score), ...] from the train-only CF model (zero-filled SVD ranking)."""
     try:
-        df = cf_model.recommend_for_user(user_id, top_n=50).dropna(subset=["title"])
-        return list(zip(df["title"], df["predicted_score"]))
+        return cf_rank_recs(cf_model, user_id, 50)
     except Exception:
         return []
 
