@@ -6,3 +6,4 @@ scikit-surprise
 streamlit
 matplotlib
 seaborn
+requests
