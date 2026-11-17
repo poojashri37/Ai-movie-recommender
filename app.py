@@ -777,7 +777,7 @@ with tab4:
         chart(st.line_chart, ALPHA_TUNING[["Precision@10", "Recall@10"]], ["#4dabf7", "#b197fc"])
     with r:
         st.caption("Rating error vs alpha")
-        chart(st.line_chart, ALPHA_TUNING[["RMSE", "MAE"]], ["#4dabf7", "#b197fc"])
+        chart(st.line_chart, ALPHA_TUNING[["RMsSE", "MAE"]], ["#4dabf7", "#b197fc"])
     st.info("alpha = 0.8 gives the lowest MAE and almost the best ranking, "
             "so it is the default.")
     footer()
